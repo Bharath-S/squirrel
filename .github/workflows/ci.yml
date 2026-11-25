@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-22.04, python: "3.8" }
+          - { os: ubuntu-latest, python: "3.13" }
+          - { os: macos-latest, python: "3.13" }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Unit tests
+        run: python -m unittest discover -s tests -t . -v
+      - name: Install into a temporary HOME
+        run: |
+          export HOME="$(mktemp -d)"
+          sh install.sh --shell bash
+          grep -q 'squirrel (save/how)' "$HOME/.bashrc"
+          "$HOME/.local/share/squirrel/bin/squirrel" --version
+          sh install.sh --uninstall --shell bash
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: pipx run ruff check .
+      - run: shellcheck install.sh
+      - run: bash -n shell/squirrel.sh
+      - run: sudo apt-get install -y zsh && zsh -n shell/squirrel.sh

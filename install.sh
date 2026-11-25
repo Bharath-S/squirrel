@@ -1,20 +1,23 @@
 #!/bin/sh
-# install.sh - install save / how / cheat-tidy for bash and/or zsh.
+# install.sh - install save / how / squirrel-tidy for bash and/or zsh.
 #
 #   ./install.sh                 detect your shell from $SHELL
 #   ./install.sh --shell zsh     or bash, or both
-#   ./install.sh --git           also make ~/cheats a git repo
+#   ./install.sh --git           also make ~/squirrel a git repo
 #   ./install.sh --uninstall     remove the lines from your rc files (keeps your saved commands)
 #
-# Env: CHEATS_HOME (where the scripts go, default ~/.local/share/cheats-tool)
-#      CHEATS_DIR  (where your commands live, default ~/cheats)
+# Env: SQUIRREL_HOME (where the scripts go, default ~/.local/share/squirrel)
+#      SQUIRREL_DIR  (where your commands live, default ~/squirrel)
 set -e
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-DEST=${CHEATS_HOME:-$HOME/.local/share/cheats-tool}
-STORE_DIR=${CHEATS_DIR:-$HOME/cheats}
-BEGIN='# >>> cheats (save/how) >>>'
-END='# <<< cheats (save/how) <<<'
+DEST=${SQUIRREL_HOME:-$HOME/.local/share/squirrel}
+# A custom store folder from before the rename (CHEATS_DIR) stays where it is.
+STORE_DIR=${SQUIRREL_DIR:-${CHEATS_DIR:-$HOME/squirrel}}
+BEGIN='# >>> squirrel (save/how) >>>'
+END='# <<< squirrel (save/how) <<<'
+LEGACY_BEGIN='# >>> cheats (save/how) >>>'
+LEGACY_END='# <<< cheats (save/how) <<<'
 
 want_shell=""
 do_git=0
@@ -48,19 +51,70 @@ rc_for() {
   esac
 }
 
-strip_block() {  # remove our block from file $1
+strip_block() {  # remove our block (and the one from before the rename) from file $1
   [ -f "$1" ] || return 0
-  if grep -qF "$BEGIN" "$1"; then
-    tmp="$1.cheats.tmp"
-    awk -v b="$BEGIN" -v e="$END" '$0==b{skip=1;next} $0==e{skip=0;next} !skip' "$1" > "$tmp"
-    cat "$tmp" > "$1" && rm -f "$tmp"
-    echo "Removed cheats lines from $1"
+  for marks in "$BEGIN|$END" "$LEGACY_BEGIN|$LEGACY_END"; do
+    b=${marks%%|*}; e=${marks#*|}
+    if grep -qF "$b" "$1"; then
+      tmp="$1.squirrel.tmp"
+      awk -v b="$b" -v e="$e" '$0==b{skip=1;next} $0==e{skip=0;next} !skip' "$1" > "$tmp"
+      cat "$tmp" > "$1" && rm -f "$tmp"
+      echo "Removed old lines from $1"
+    fi
+  done
+}
+
+# Before 1.0 this project was called "cheats". Move that setup over to squirrel.
+migrate_from_cheats() {
+  old_store=$HOME/cheats
+  old_home=${CHEATS_HOME:-$HOME/.local/share/cheats-tool}
+  cache=${XDG_CACHE_HOME:-$HOME/.cache}
+
+  # saved commands: ~/cheats -> ~/squirrel (a custom CHEATS_DIR is kept in place)
+  if [ -z "${CHEATS_DIR-}" ] && [ -d "$old_store" ] && [ "$old_store" != "$STORE_DIR" ]; then
+    if [ -d "$STORE_DIR" ] && [ ! -s "$STORE_DIR/commands.jsonl" ]; then
+      rm -f "$STORE_DIR/commands.jsonl"
+      rmdir "$STORE_DIR" 2>/dev/null || true   # only if nothing else is in it
+    fi
+    if [ -e "$STORE_DIR" ]; then
+      echo "Both $old_store and $STORE_DIR have saved commands, so neither was moved. To merge them:" >&2
+      echo "  cat $old_store/commands.jsonl >> $STORE_DIR/commands.jsonl && rm -r $old_store" >&2
+    else
+      mv "$old_store" "$STORE_DIR"
+      echo "Moved your saved commands from $old_store to $STORE_DIR"
+    fi
   fi
+
+  # remembered placeholder values
+  if [ -f "$cache/cheats/state.json" ] && [ ! -f "$cache/squirrel/state.json" ]; then
+    mkdir -p "$cache/squirrel"
+    mv "$cache/cheats/state.json" "$cache/squirrel/state.json"
+  fi
+  rmdir "$cache/cheats" 2>/dev/null || true
+
+  # the old program files (only the files the old installer put there)
+  if [ -d "$old_home" ] && [ "$old_home" != "$DEST" ]; then
+    rm -f "$old_home/cheats.sh" "$old_home/cheats.py"
+    rm -rf "$old_home/__pycache__"
+    rmdir "$old_home" 2>/dev/null && echo "Removed the old program in $old_home"
+  fi
+
+  # rc files: drop the old block and rename CHEATS_* settings to SQUIRREL_*
+  for rc in "$(rc_for zsh)" "$(rc_for bash)"; do
+    [ -f "$rc" ] || continue
+    strip_block "$rc" >/dev/null
+    if grep -q 'CHEATS_' "$rc"; then
+      sed 's/CHEATS_/SQUIRREL_/g' "$rc" > "$rc.squirrel.tmp"
+      cat "$rc.squirrel.tmp" > "$rc" && rm -f "$rc.squirrel.tmp"
+      echo "Renamed CHEATS_* settings to SQUIRREL_* in $rc"
+    fi
+  done
+  return 0
 }
 
 if [ "$uninstall" = 1 ]; then
   for s in $shells; do strip_block "$(rc_for "$s")"; done
-  echo "Your saved commands in $STORE_DIR were left alone. Scripts are in $DEST (delete it if you like)."
+  echo "Your saved commands in $STORE_DIR were left alone. The program is in $DEST (delete it if you like)."
   exit 0
 fi
 
@@ -78,13 +132,17 @@ else
   echo "  macOS: brew install fzf      Ubuntu: sudo apt install fzf"
 fi
 
-# ---- copy scripts
-mkdir -p "$DEST"
+migrate_from_cheats
+
+# ---- copy files (same layout as the repo: bin/, squirrel/, shell/)
 if [ "$HERE" != "$DEST" ]; then
-  cp "$HERE/cheats.sh" "$HERE/cheats.py" "$DEST/"
+  mkdir -p "$DEST/bin" "$DEST/squirrel" "$DEST/shell"
+  cp "$HERE/bin/squirrel" "$DEST/bin/"
+  cp "$HERE"/squirrel/*.py "$DEST/squirrel/"
+  cp "$HERE/shell/squirrel.sh" "$DEST/shell/"
 fi
-chmod +x "$DEST/cheats.py"
-echo "Installed scripts to $DEST"
+chmod +x "$DEST/bin/squirrel"
+echo "Installed to $DEST"
 
 # ---- store
 mkdir -p "$STORE_DIR"
@@ -110,12 +168,12 @@ for s in $shells; do
   strip_block "$rc" >/dev/null
   {
     echo "$BEGIN"
-    echo "export CHEATS_HOME=\"$DEST\""
-    [ "$STORE_DIR" != "$HOME/cheats" ] && echo "export CHEATS_DIR=\"$STORE_DIR\""
-    echo "[ -f \"\$CHEATS_HOME/cheats.sh\" ] && . \"\$CHEATS_HOME/cheats.sh\""
+    echo "export SQUIRREL_HOME=\"$DEST\""
+    [ "$STORE_DIR" != "$HOME/squirrel" ] && echo "export SQUIRREL_DIR=\"$STORE_DIR\""
+    echo "[ -f \"\$SQUIRREL_HOME/shell/squirrel.sh\" ] && . \"\$SQUIRREL_HOME/shell/squirrel.sh\""
     echo "$END"
   } >> "$rc"
-  echo "Added cheats to $rc"
+  echo "Added squirrel to $rc"
 done
 
 if [ "$(uname -s)" = Darwin ] && echo "$shells" | grep -q bash; then
